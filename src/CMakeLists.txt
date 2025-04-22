@@ -2,8 +2,6 @@ add_library(PicoServo STATIC
     PicoServo.c
 )
 
-add_subdirectory(lib/PicoPioPWM)
-
 target_include_directories(PicoServo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(PicoServo PRIVATE
