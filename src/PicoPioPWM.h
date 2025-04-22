@@ -2,9 +2,8 @@
 #define _PICO_PIO_PWM_H_
 
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include "hardware/pio.h"
-#include "hardware/clocks.h"
-#include "pwm.pio.h"
 
 #if __cplusplus
 extern "C" {
@@ -22,6 +21,8 @@ struct PicoPioPWM
     PIO pio;
     uint sm;
     uint offset;
+
+    mutex_t mux;
 };
 
 extern bool pico_pio_pwm_init(struct PicoPioPWM *pwm, uint8_t pin, bool inverted);
@@ -30,6 +31,12 @@ extern void pico_pio_pwm_deinit(struct PicoPioPWM *pwm);
 
 extern bool pico_pio_pwm_set_period_us(struct PicoPioPWM *pwm, uint32_t period_us);
 extern bool pico_pio_pwm_set_duty_us(struct PicoPioPWM *pwm, uint32_t duty_us);
+
+extern bool pico_pio_pwm_release_safe(struct PicoPioPWM *pwm);
+extern bool pico_pio_pwm_deinit_safe(struct PicoPioPWM *pwm);
+
+extern bool pico_pio_pwm_set_period_us_safe(struct PicoPioPWM *pwm, uint32_t period_us);
+extern bool pico_pio_pwm_set_duty_us_safe(struct PicoPioPWM *pwm, uint32_t duty_us);
 
 #if __cplusplus
 }
