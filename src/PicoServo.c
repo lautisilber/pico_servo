@@ -66,37 +66,56 @@ bool pico_servo_init(struct PicoServo *servo, uint8_t pin, bool inverted)
 
 bool pico_servo_set_min_max_us(struct PicoServo *servo, uint32_t min_us, uint32_t max_us)
 {
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
-        return false;
-    servo->min_us = min_us;
-    servo->max_us = max_us;
-    mutex_exit(&servo->pwm.mux);
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+    
+        servo->min_us = min_us;
+        servo->max_us = max_us;
+
+    );
     return true;
 }
 
 bool pico_servo_set_min_max_angle(struct PicoServo *servo, uint8_t min_angle, uint8_t max_angle)
 {
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
-        return false;
-    servo->min_angle = min_angle;
-    servo->max_angle = max_angle;
-    mutex_exit(&servo->pwm.mux);
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+
+        servo->min_angle = min_angle;
+        servo->max_angle = max_angle;
+
+    );
     return true;
 }
 
 bool pico_servo_attach(struct PicoServo *servo)
 {
-    return pico_pio_pwm_set_period_us(&servo->pwm, SERVO_PERIOD_US);
+    bool res;
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+
+        res = pico_pio_pwm_set_period_us(&servo->pwm, SERVO_PERIOD_US);
+
+    );
+    return res;
 }
 
 bool pico_servo_release(struct PicoServo *servo)
 {
-    return pico_pio_pwm_release(&servo->pwm);
+    bool res;
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+
+        res = pico_pio_pwm_release(&servo->pwm);
+
+    );
+    return res;
 }
 
-void pico_servo_deinit(struct PicoServo *servo)
+bool pico_servo_deinit(struct PicoServo *servo)
 {
-    pico_pio_pwm_deinit(&servo->pwm);
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+        
+        pico_pio_pwm_deinit(&servo->pwm);
+
+    );
+    return true;
 }
 
 static inline uint32_t pico_servo_angle_to_us(struct PicoServo *servo, uint8_t angle)
@@ -113,46 +132,61 @@ static inline uint32_t pico_servo_angle_to_us(struct PicoServo *servo, uint8_t a
 
 bool pico_servo_set_angle(struct PicoServo *servo, uint8_t angle)
 {
-    angle = clamp(angle, servo->min_angle, servo->max_angle);
-    const uint32_t duty_us = pico_servo_angle_to_us(servo, angle);
-    // bool res = pico_pio_pwm_set_period_us(&servo->pwm, period);
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
-        return false;
-    bool res = pico_pio_pwm_set_duty_us(&servo->pwm, duty_us);
-    if (res)
-        servo->angle = angle;
-    mutex_exit(&servo->pwm.mux);
+    bool res;
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+        
+        res = servo->pwm.claimed;
+
+        if (res)
+        {
+            angle = clamp(angle, servo->min_angle, servo->max_angle);
+            const uint32_t duty_us = pico_servo_angle_to_us(servo, angle);
+            res = pico_pio_pwm_set_duty_us(&servo->pwm, duty_us);
+            if (res)
+                servo->angle = angle;
+        }
+
+    );
     return res;
 }
 
 bool pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us)
 {
-    if (!servo->pwm.claimed)
-        return false;
+    bool res;
+    MUTEX_BLOCK_TIMEOUT(servo->pwm.mux, MUTEX_TIMEOUT_MS,
+        
+        res = servo->pwm.claimed;
 
-    goal_angle = clamp(goal_angle, servo->min_angle, servo->max_angle);
+        if (res)
+        {
+            goal_angle = clamp(goal_angle, servo->min_angle, servo->max_angle);
 
-    if (servo->angle == goal_angle)
-        return true;
+            // res is true
+            if (servo->angle != goal_angle)
+            {
+                int32_t curr_us = pico_servo_angle_to_us(servo, servo->angle);
+                int32_t final_us = pico_servo_angle_to_us(servo, goal_angle);
+                const int8_t dir = (goal_angle > servo->angle ? 1 : -1);
+                const int32_t step = (int32_t)dir * resolution_us;
 
-    int32_t curr_us = pico_servo_angle_to_us(servo, servo->angle);
-    int32_t final_us = pico_servo_angle_to_us(servo, goal_angle);
-    const int8_t dir = (goal_angle > servo->angle ? 1 : -1);
-    const int32_t step = (int32_t)dir * resolution_us;
+                for (int32_t us = curr_us; (dir > 0 && us <= final_us) || (dir < 0 && us >= final_us); us += step)
+                {
+                    // // once it's set to false, it stays false
+                    // res &= pico_pio_pwm_set_duty_us(&servo->pwm, us);
+                    if (!pico_pio_pwm_set_duty_us(&servo->pwm, us))
+                    {
+                        res = false;
+                        break;
+                    }
+                    sleep_ms(delay_ms);
+                }
 
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
-        return false;
+                if (res)
+                    servo->angle = goal_angle;
+            }
+        }
 
-    bool error = false;
-    for (int32_t us = curr_us; (dir > 0 && us <= final_us) || (dir < 0 && us >= final_us); us += step)
-    {
-        error |= !pico_pio_pwm_set_duty_us(&servo->pwm, us);
-        sleep_ms(delay_ms);
-    }
+    );
 
-    if (!error)
-        servo->angle = goal_angle;
-
-    mutex_exit(&servo->pwm.mux);
-    return !error;
+    return res;
 }
