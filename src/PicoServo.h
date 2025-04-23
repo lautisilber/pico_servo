@@ -41,7 +41,6 @@
 #define _PICO_SERVO_H_
 
 #include "pico/stdlib.h"
-#include "pico/sync.h"
 #include "PicoPioPWM.h" // Ensure this header defines PicoPioPWM
 
 
@@ -59,8 +58,6 @@ struct PicoServo {
     uint32_t max_us;
     uint8_t min_angle;
     uint8_t max_angle;
-
-    mutex_t mux;
 };
 
 extern bool pico_servo_init(struct PicoServo *servo, uint8_t pin, bool inverted);
@@ -75,7 +72,6 @@ extern void pico_servo_deinit(struct PicoServo *servo);
 extern bool pico_servo_set_angle(struct PicoServo *servo, uint8_t angle);
 
 // should be initialized externally
-extern void pico_servo_delay_ms(uint32_t ms);
 extern bool pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us);
 
 #if __cplusplus

@@ -1,7 +1,6 @@
 #include "PicoServo.h"
-#include <stdio.h>
 
-#include "pico/sync.h"
+#include "pico/mutex.h"
 
 #define SERVO_DEFAULT_MIN_PULSE_WIDTH_US 1000 // uncalibrated default, the shortest duty cycle sent to a servo
 #define SERVO_DEFAULT_MAX_PULSE_WIDTH_US 2000 // uncalibrated default, the longest duty cycle sent to a servo
@@ -14,7 +13,36 @@
 #define map(v, in_min, in_max, out_min, out_max) \
     (((v) - (in_min)) * ((out_max) - (out_min)) / ((in_max) - (in_min)) + (out_min))
 
+#define MUTEX_TIMEOUT_MS 3000
 
+#ifndef PICO_PIO_PWM_NO_MUTEX
+#define MUTEX_BLOCK(mux, ...)       \
+    do                              \
+    {                               \
+        mutex_enter_blocking(&mux); \
+        __VA_ARGS__                 \
+        mutex_exit(&mux);           \
+    } while (0)
+#define MUTEX_BLOCK_TIMEOUT(mux, timeout_ms, ...)      \
+    do                                                 \
+    {                                                  \
+        if (!mutex_enter_timeout_ms(&mux, timeout_ms)) \
+            return false;                              \
+        __VA_ARGS__                                    \
+        mutex_exit(&mux);                              \
+    } while (0)
+#else
+#define MUTEX_BLOCK(mux, ...) \
+    do                        \
+    {                         \
+        __VA_ARGS__           \
+    } while (0)
+#define MUTEX_BLOCK_TIMEOUT(mux, timeout_ms, ...) \
+    do                                            \
+    {                                             \
+        __VA_ARGS__                               \
+    } while (0)
+#endif
 
 bool pico_servo_init(struct PicoServo *servo, uint8_t pin, bool inverted)
 {
@@ -23,22 +51,23 @@ bool pico_servo_init(struct PicoServo *servo, uint8_t pin, bool inverted)
         return false;
 
     // blocking should be ok since we just created it
-    mutex_enter_blocking(&servo->pwm.mux);
+    MUTEX_BLOCK(servo->pwm.mux,
+    
+        servo->min_us = SERVO_DEFAULT_MIN_PULSE_WIDTH_US;
+        servo->max_us = SERVO_DEFAULT_MAX_PULSE_WIDTH_US;
+    
+        servo->min_angle = SERVO_DEFAULT_MIN_ANGLE;
+        servo->max_angle = SERVO_DEFAULT_MAX_ANGLE;
 
-    servo->min_us = SERVO_DEFAULT_MIN_PULSE_WIDTH_US;
-    servo->max_us = SERVO_DEFAULT_MAX_PULSE_WIDTH_US;
-
-    servo->min_angle = SERVO_DEFAULT_MIN_ANGLE;
-    servo->max_angle = SERVO_DEFAULT_MAX_ANGLE;
-
-    mutex_exit(&servo->pwm.mux);
+    );
 
     return true;
 }
 
 bool pico_servo_set_min_max_us(struct PicoServo *servo, uint32_t min_us, uint32_t max_us)
 {
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000)) return false;
+    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
+        return false;
     servo->min_us = min_us;
     servo->max_us = max_us;
     mutex_exit(&servo->pwm.mux);
@@ -47,7 +76,8 @@ bool pico_servo_set_min_max_us(struct PicoServo *servo, uint32_t min_us, uint32_
 
 bool pico_servo_set_min_max_angle(struct PicoServo *servo, uint8_t min_angle, uint8_t max_angle)
 {
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000)) return false;
+    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
+        return false;
     servo->min_angle = min_angle;
     servo->max_angle = max_angle;
     mutex_exit(&servo->pwm.mux);
@@ -86,8 +116,9 @@ bool pico_servo_set_angle(struct PicoServo *servo, uint8_t angle)
     angle = clamp(angle, servo->min_angle, servo->max_angle);
     const uint32_t duty_us = pico_servo_angle_to_us(servo, angle);
     // bool res = pico_pio_pwm_set_period_us(&servo->pwm, period);
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000)) return false;
-    bool res = pico_pio_pwm_set_duty_us_unsafe(&servo->pwm, duty_us);
+    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
+        return false;
+    bool res = pico_pio_pwm_set_duty_us(&servo->pwm, duty_us);
     if (res)
         servo->angle = angle;
     mutex_exit(&servo->pwm.mux);
@@ -99,21 +130,29 @@ bool pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t dela
     if (!servo->pwm.claimed)
         return false;
 
-    if (servo->angle == goal_angle) return true;
-    
+    goal_angle = clamp(goal_angle, servo->min_angle, servo->max_angle);
+
+    if (servo->angle == goal_angle)
+        return true;
+
     int32_t curr_us = pico_servo_angle_to_us(servo, servo->angle);
     int32_t final_us = pico_servo_angle_to_us(servo, goal_angle);
     const int8_t dir = (goal_angle > servo->angle ? 1 : -1);
-    const int32_t step =  (int32_t)dir * resolution_us;
+    const int32_t step = (int32_t)dir * resolution_us;
 
-    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000)) return false;
-    for (int32_t us = curr_us; (dir > 0 && us < final_us) || (dir < 0 && us > final_us); us += step)
+    if (!mutex_enter_timeout_ms(&servo->pwm.mux, 1000))
+        return false;
+
+    bool error = false;
+    for (int32_t us = curr_us; (dir > 0 && us <= final_us) || (dir < 0 && us >= final_us); us += step)
     {
-        pico_pio_pwm_set_duty_us_unsafe(&servo->pwm, us);
+        error |= !pico_pio_pwm_set_duty_us(&servo->pwm, us);
         sleep_ms(delay_ms);
     }
 
-    pico_servo_set_angle(servo, goal_angle);
+    if (!error)
+        servo->angle = goal_angle;
+
     mutex_exit(&servo->pwm.mux);
-    return true;
+    return !error;
 }
