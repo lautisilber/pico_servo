@@ -48,6 +48,11 @@ static inline bool pico_pio_pwm_set_period(struct PicoPioPWM *pwm, uint32_t peri
 {
     if (!pwm->claimed)
         return false;
+    // Wait until the FIFO has been consumed before disabling SM
+    while (!pio_sm_is_tx_fifo_empty(pwm->pio, pwm->sm)) {
+        tight_loop_contents();
+    }
+    
     pio_sm_set_enabled(pwm->pio, pwm->sm, false);
     pio_sm_put_blocking(pwm->pio, pwm->sm, period);
     pio_sm_exec(pwm->pio, pwm->sm, pio_encode_pull(false, false));
