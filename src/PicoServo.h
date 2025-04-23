@@ -30,10 +30,10 @@ extern void pico_servo_attach(struct PicoServo *servo);
 extern void pico_servo_release(struct PicoServo *servo);
 extern void pico_servo_deinit(struct PicoServo *servo);
 
-extern void pico_servo_set_angle(struct PicoServo *servo, uint8_t angle);
+extern bool pico_servo_set_angle(struct PicoServo *servo, uint8_t angle);
 
 // should be initialized externally
-extern void pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us);
+extern bool pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us);
 
 #if __cplusplus
 }

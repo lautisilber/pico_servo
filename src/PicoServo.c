@@ -125,26 +125,34 @@ static inline uint32_t pico_servo_angle_to_us(struct PicoServo *servo, uint8_t a
     // return (dx * out_span) / in_span + servo->min_us;
 }
 
-void pico_servo_set_angle(struct PicoServo *servo, uint8_t angle)
+bool pico_servo_set_angle(struct PicoServo *servo, uint8_t angle)
 {
+    bool res;
     MUTEX_BLOCK(servo->pwm.mux,
         
-        if (servo->pwm.claimed)
+        res = servo->pwm.claimed;
+
+        if (res)
         {
             angle = clamp(angle, servo->min_angle, servo->max_angle);
             const uint32_t duty_us = pico_servo_angle_to_us(servo, angle);
-            if (pico_pio_pwm_set_duty_us(&servo->pwm, duty_us))
+            res = pico_pio_pwm_set_duty_us(&servo->pwm, duty_us);
+            if (res)
                 servo->angle = angle;
         }
 
     );
+    return res;
 }
 
-void pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us)
+bool pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t delay_ms, uint32_t resolution_us)
 {
+    bool res;
     MUTEX_BLOCK(servo->pwm.mux,
         
-        if (servo->pwm.claimed)
+        res = servo->pwm.claimed;
+
+        if (res)
         {
             goal_angle = clamp(goal_angle, servo->min_angle, servo->max_angle);
 
@@ -156,23 +164,24 @@ void pico_servo_sweep(struct PicoServo *servo, uint8_t goal_angle, uint32_t dela
                 const int8_t dir = (goal_angle > servo->angle ? 1 : -1);
                 const int32_t step = (int32_t)dir * resolution_us;
 
-                bool success = true;
                 for (int32_t us = curr_us; (dir > 0 && us <= final_us) || (dir < 0 && us >= final_us); us += step)
                 {
                     // // once it's set to false, it stays false
                     // res &= pico_pio_pwm_set_duty_us(&servo->pwm, us);
                     if (!pico_pio_pwm_set_duty_us(&servo->pwm, us))
                     {
-                        success = false;
+                        res = false;
                         break;
                     }
                     sleep_ms(delay_ms);
                 }
 
-                if (success)
+                if (res)
                     servo->angle = goal_angle;
             }
         }
 
     );
+
+    return res;
 }
